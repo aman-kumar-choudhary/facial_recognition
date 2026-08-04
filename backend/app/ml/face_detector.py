@@ -1,0 +1,70 @@
+"""Face detection using the shared Antelope SCRFD model."""
+from dataclasses import dataclass
+import logging
+from typing import List
+
+import numpy as np
+from app.config import settings
+from app.ml.model_registry import FaceModelRegistry, get_face_model_registry
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DetectedFace:
+    bbox: np.ndarray          # [x1, y1, x2, y2]
+    landmarks: np.ndarray     # 5x2 keypoints (eyes, nose, mouth corners)
+    det_score: float
+    embedding: np.ndarray | None = None  # populated later by recognizer
+
+
+class NoFaceDetectedError(Exception):
+    pass
+
+
+class MultipleFacesDetectedError(Exception):
+    def __init__(self, count: int):
+        self.count = count
+        super().__init__(f"Expected exactly one face, found {count}")
+
+
+class FaceDetector:
+    """A lightweight wrapper around the registry's one prepared SCRFD model."""
+
+    def __init__(self, registry: FaceModelRegistry | None = None):
+        self._registry = registry or get_face_model_registry()
+        self._detector = self._registry.detector
+
+    def detect(self, image_bgr: np.ndarray) -> List[DetectedFace]:
+        bboxes, keypoints = self._detector.detect(image_bgr, max_num=0, metric="default")
+        if bboxes.shape[0] == 0:
+            logger.debug("face_detection_completed", extra={"event": "face_detection_completed", "face_count": 0})
+            return []
+        results = []
+        for index, bbox_with_score in enumerate(bboxes):
+            det_score = float(bbox_with_score[4])
+            if det_score < settings.DETECTION_MIN_CONFIDENCE:
+                continue
+            if keypoints is None:
+                raise RuntimeError("SCRFD detector did not return the five landmarks required for ArcFace alignment.")
+            results.append(
+                DetectedFace(
+                    bbox=bbox_with_score[:4],
+                    landmarks=keypoints[index],
+                    det_score=det_score,
+                )
+            )
+        logger.debug(
+            "face_detection_completed",
+            extra={"event": "face_detection_completed", "face_count": len(results)},
+        )
+        return results
+
+    def detect_single(self, image_bgr: np.ndarray) -> DetectedFace:
+        """Enforces the 'only one face processed at a time' business rule."""
+        faces = self.detect(image_bgr)
+        if len(faces) == 0:
+            raise NoFaceDetectedError("No face detected in frame")
+        if len(faces) > 1:
+            raise MultipleFacesDetectedError(len(faces))
+        return faces[0]

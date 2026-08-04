@@ -1,0 +1,74 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ""
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [internal]
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      # Containers use the internal Redis service; all application data is
+      # persisted on the named volume instead of in the rebuilt image.
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      # SQLite and FAISS are in-process backend libraries. Their files
+      # (students.db, vector.index, vector.meta.json, images, and logs) all
+      # live in this persistent volume; they are not separate services.
+      - face_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [internal]
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${APP_PORT:-80}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks: [internal]
+
+volumes:
+  # Docker-managed external persistent storage. `docker compose down` does
+  # not remove it; use `down -v` only when intentionally deleting all data.
+  face_data:
+  redis_data:
+
+networks:
+  internal:
+    driver: bridge

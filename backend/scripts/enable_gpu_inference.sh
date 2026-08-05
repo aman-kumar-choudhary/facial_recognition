@@ -6,6 +6,7 @@ python -m pip uninstall -y onnxruntime
 python -m pip install \
   'onnxruntime-gpu==1.19.2' \
   'nvidia-cuda-runtime-cu12' \
+  'nvidia-cublas-cu12' \
   'nvidia-cudnn-cu12'
 python - <<'PY'
 import onnxruntime as ort

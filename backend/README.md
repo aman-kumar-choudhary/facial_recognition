@@ -144,6 +144,20 @@ Storage and recognition security are configuration-only settings:
 IMAGE_STORAGE_MODE=both
 # 0.0-1.0; authentication stops before liveness/vector search below this value
 FACE_VISIBILITY_THRESHOLD=0.80
+# The visibility score combines eye/nose/mouth evidence at the five SCRFD
+# landmarks with frame integrity. Authentication stops when the score is below
+# FACE_VISIBILITY_THRESHOLD. The component scores are emitted in application
+# logs as `face_visibility_assessed` for camera-specific calibration.
+FACE_VISIBILITY_FRAME_MARGIN_RATIO=0.025
+FACE_VISIBILITY_MIN_LANDMARK_SPREAD_RATIO=0.18
+FACE_VISIBILITY_EYE_DARK_PIXEL_RATIO=0.30
+FACE_VISIBILITY_NOSE_DARK_PIXEL_RATIO=0.20
+FACE_VISIBILITY_MOUTH_DARK_PIXEL_RATIO=0.40
+
+# MiniFASNet V1SE/V2 use bona-fide class 1. Both models are fused before one
+# three-class decision; the threshold is applied to the fused real-class score.
+LIVENESS_REAL_CLASS_INDEX=1
+LIVENESS_THRESHOLD=0.50
 ```
 
 Switching `IMAGE_STORAGE_MODE` affects new enrollment images and embeddings
@@ -167,6 +181,36 @@ Check it's alive:
 ```bash
 curl http://localhost:8000/health
 ```
+
+### 3.7 Optional model benchmark backends
+
+The default is unchanged: **SCRFD + MiniFASNet + ArcFace**. To download the
+additional supported detector and recognition weights into `models/`, run:
+
+```bash
+bash scripts/download_optional_models.sh
+```
+
+It installs/preloads MTCNN, RetinaFace, FaceNet (CASIA-WebFace), FaceNet
+trained on VGGFace2, and DeepFace. The API exposes their state through
+`GET /api/v1/models`; select a fully available combination with:
+
+```bash
+curl -X PUT http://localhost:8000/api/v1/models/active \
+  -H 'Content-Type: application/json' \
+  -d '{"detection":"MTCNN","liveness":"MiniFASNet","recognition":"FaceNet"}'
+```
+
+Model selections are atomic and lazy-loaded; if a dependency or weight is
+missing, the API returns `409` and leaves the active pipeline untouched.
+Each recognition backend has its own FAISS index, so enroll benchmark users
+again after changing the recognition model. Do not compare raw cosine scores
+or reuse the ArcFace threshold across models without calibration.
+
+`CDCN` is also selectable, but it deliberately needs an operator-supplied,
+calibrated binary ONNX classifier at `CDCN_MODEL_PATH`. The official CDCN
+release contains research checkpoints rather than a standard safe inference
+artifact. Its exact input/output contract is in `models/cdcn/README.md`.
 
 ---
 
@@ -260,11 +304,14 @@ To swap in a fine-tuned model:
 
 ## 7. Passive liveness (Silent-Face) — deployment requirements
 
-The API uses the exact SCRFD detection box for liveness, expands it using the
-crop convention required by each Silent-Face model, then performs ArcFace
-alignment and embedding **only after** a live decision. The same gate is
-enforced at enrollment, so a printed photo cannot become a stored student
-reference.
+The API uses the SCRFD detection box for liveness, expands it using the crop
+convention required by each Silent-Face model, then performs ArcFace alignment
+and embedding **only after** a live decision. MiniFASNet consumes an 80×80
+NCHW BGR tensor in the original 0–255 range. The V1SE and V2 logits are
+averaged before one softmax/three-class decision; one model's lower raw score
+is not incorrectly treated as a veto. Liveness is deliberately applied only
+during authentication, so a camera-captured enrollment image is not blocked
+by the verification-only anti-spoof check.
 
 The model ensemble catches common 2D presentation attacks such as printed
 photos and screen replays, but an RGB-only passive model is not a guarantee
@@ -272,7 +319,8 @@ against every high-quality mask, deepfake, or camera/device domain shift. The
 upstream project likewise requires camera-captured, well-lit, mostly frontal
 faces. Before a campus deployment, tune `LIVENESS_THRESHOLD` using real
 captures from the target cameras and both bona-fide students and presentation
-attacks; do not treat the shipped `0.80` as a certified operating point.
+attacks. The shipped `0.50` is the model's default decision boundary, not a
+certified operating point.
 
 ---
 

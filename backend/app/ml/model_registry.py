@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from insightface.app import FaceAnalysis
 
 from app.config import settings
-from app.ml.runtime import InferenceRuntime, get_inference_runtime
+from app.ml.runtime import InferenceRuntime, assert_cuda_session, get_inference_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,11 @@ class FaceModelRegistry:
             raise RuntimeError(
                 f"Model pack '{pack_name}' must provide both detection and recognition models."
             )
+        for model_name, model in (("SCRFD detector", detector), ("ArcFace recognizer", recognizer)):
+            session = getattr(model, "session", None)
+            if session is None:
+                raise RuntimeError(f"{model_name} does not expose an ONNX Runtime session.")
+            assert_cuda_session(session, model_name)
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
         logger.info(
             "model_pack_initialized",

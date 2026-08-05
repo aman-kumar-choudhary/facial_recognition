@@ -14,8 +14,28 @@ files in the backend data volume.
 docker compose up --build -d
 ```
 
-Open `http://localhost` (or set `APP_PORT` before starting). All API calls go
-through Nginx at `/api/`; `/health` is also proxied for readiness checks.
+Open `http://localhost` (or set `APP_PORT` before starting). The public Nginx
+and the private frontend Nginx both listen on port 80; only the public Nginx
+has a host port. All API calls go through Nginx at `/api/`; `/health` is also
+proxied for readiness checks.
+
+### Camera use from another device
+
+Camera access belongs to the device and browser which opened the page. For
+example, opening the app on a phone requests that phone's camera, not the
+Docker host's webcam. Browsers permit camera access on `localhost`, but block
+it on plain HTTP LAN addresses such as `http://192.168.x.x`. To use a phone or
+another computer, publish this Nginx endpoint through **HTTPS** with a
+certificate trusted by that device, then open `https://your-hostname`.
+
+### GPU inference
+
+The Compose backend requires an NVIDIA GPU and is configured to fail startup
+rather than run inference on CPU. Install and configure the NVIDIA Container
+Toolkit before starting the stack. Verify the active execution provider with
+`docker compose exec backend python -c "import onnxruntime as ort;
+print(ort.get_available_providers())"`; the output must include
+`CUDAExecutionProvider`.
 
 `face_data` is a Docker-managed persistent volume mounted at `/app/data` in
 the backend. It holds SQLite, FAISS, enrollment images, and the audit log, so

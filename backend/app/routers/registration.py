@@ -64,7 +64,8 @@ async def register_student(
         embedding_quality_score=sum(result.quality_score for result in results.values()) / len(results),
     )
     image_paths = []
-    vector_store = get_vector_store()
+    recognition_model = next(iter(results.values())).models["recognition"]
+    vector_store = get_vector_store(recognition_model)
     try:
         db.add(student)
         await db.flush()
@@ -104,6 +105,7 @@ async def register_student(
             "student_id": student.student_id,
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             "embedding_count": len(embeddings),
+            "recognition_model": recognition_model,
         },
     )
 

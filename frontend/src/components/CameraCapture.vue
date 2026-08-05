@@ -15,6 +15,13 @@ const cameraReady = ref(false)
 const cameraError = ref('')
 
 async function startCamera() {
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    cameraError.value =
+      'Camera access requires HTTPS when opening this app by an IP address. Open it through HTTPS and allow camera permission.'
+    emit('camera-error', cameraError.value)
+    return
+  }
+
   try {
     stream.value = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
@@ -30,7 +37,7 @@ async function startCamera() {
   } catch (err) {
     cameraError.value =
       err.name === 'NotAllowedError'
-        ? 'Camera access denied. Allow camera permission and reload.'
+        ? 'Camera access denied. Allow camera permission in this browser and reload.'
         : 'Could not access a camera on this device.'
     emit('camera-error', cameraError.value)
   }

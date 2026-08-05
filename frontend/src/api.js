@@ -2,10 +2,10 @@
 // variable is absent altogether, retain the existing local-development URL.
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
-async function postJson(path, body) {
+async function postJson(path, body, method = 'POST') {
   const startedAt = performance.now()
   const res = await fetch(`${BASE_URL}${path}`, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
@@ -40,4 +40,16 @@ export function assessFacePosition({ imageBase64, pose }) {
     image_base64: imageBase64,
     pose,
   })
+}
+
+export function getModelStatus() {
+  return fetch(`${BASE_URL}/api/v1/models`).then(async (res) => {
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.detail || 'Could not load model status')
+    return data
+  })
+}
+
+export function setActiveModels(models) {
+  return postJson('/api/v1/models/active', models, 'PUT')
 }

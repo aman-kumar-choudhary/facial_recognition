@@ -21,6 +21,16 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# The optional models use independent indexes.  This keeps both vector shape
+# and score distribution isolated from ArcFace without asking operators to
+# edit EMBEDDING_DIM every time they run a benchmark.
+_MODEL_EMBEDDING_DIMS = {
+    "ArcFace": 512,
+    "FaceNet": 512,
+    "VGGFace2": 512,
+    "DeepFace": 4096,
+}
+
 
 class VectorStore:
     def add(self, student_id: str, embedding: np.ndarray) -> None:
@@ -45,11 +55,14 @@ class FaissVectorStore(VectorStore):
     int64). Each registered student has vectors for the configured image
     storage representation(s)."""
 
-    def __init__(self):
+    def __init__(self, namespace: str = "ArcFace"):
         self._lock = threading.RLock()
-        self._dim = settings.EMBEDDING_DIM
-        self._index_path = settings.VECTOR_INDEX_PATH
-        self._meta_path = settings.VECTOR_META_PATH
+        self._dim = _MODEL_EMBEDDING_DIMS.get(namespace, settings.EMBEDDING_DIM)
+        # Embeddings from different recognition models must never share an
+        # index: their dimensionality and distance distributions differ.
+        suffix = "" if namespace == "ArcFace" else f".{namespace.lower()}"
+        self._index_path = f"{settings.VECTOR_INDEX_PATH}{suffix}"
+        self._meta_path = f"{settings.VECTOR_META_PATH}{suffix}"
         os.makedirs(os.path.dirname(self._index_path) or ".", exist_ok=True)
 
         base_index = faiss.IndexFlatIP(self._dim)
@@ -189,17 +202,16 @@ class FaissVectorStore(VectorStore):
         return True
 
 
-_store_singleton: Optional[VectorStore] = None
+_store_singletons: dict[str, VectorStore] = {}
 
 
-def get_vector_store() -> VectorStore:
-    global _store_singleton
-    if _store_singleton is None:
+def get_vector_store(namespace: str = "ArcFace") -> VectorStore:
+    if namespace not in _store_singletons:
         if settings.VECTOR_STORE_BACKEND == "faiss":
-            _store_singleton = FaissVectorStore()
+            _store_singletons[namespace] = FaissVectorStore(namespace)
         else:
             raise NotImplementedError(
                 f"Vector backend '{settings.VECTOR_STORE_BACKEND}' not wired up yet. "
                 "Add a class implementing VectorStore and register it here."
             )
-    return _store_singleton
+    return _store_singletons[namespace]

@@ -1,21 +1,32 @@
 services:
   frontend:
+    image: frontend:latest
+    container_name: frontend
     build:
       context: ./frontend
       args:
         VITE_API_BASE_URL: ""
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/ || exit 1"]
+      # Use IPv4 explicitly: the custom Nginx configuration only listens on
+      # IPv4, while `localhost` may resolve to IPv6 first in Alpine.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
     networks: [internal]
 
   backend:
+    image: backend:latest
+    container_name: backend
     build: ./backend
+    # GPU inference is mandatory. Docker must have NVIDIA GPU support
+    # configured; otherwise the backend deliberately fails at startup.
+    gpus: all
     env_file: ./backend/.env
     environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       # Containers use the internal Redis service; all application data is
       # persisted on the named volume instead of in the rebuilt image.
       REDIS_URL: redis://redis:6379/0
@@ -38,6 +49,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: redis
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
@@ -51,6 +63,7 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
+    container_name: nginx
     ports:
       - "${APP_PORT:-80}:80"
     volumes:

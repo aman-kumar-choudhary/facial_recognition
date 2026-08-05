@@ -1,13 +1,17 @@
 <script setup>
-import { ref, onBeforeUnmount } from 'vue'
+import { ref, onBeforeUnmount, onMounted } from 'vue'
 import CameraCapture from '../components/CameraCapture.vue'
-import { assessFacePosition, authenticateFace } from '../api'
+import { assessFacePosition, authenticateFace, getModelStatus, setActiveModels } from '../api'
 
 const cameraRef = ref(null)
 const scanState = ref('no-face') // no-face | misaligned | ready | scanning | success | danger
 const result = ref(null)
 const errorMessage = ref('')
 const guidance = ref('Waiting for a face…')
+const modelStatus = ref({ active: { detection: 'SCRFD', liveness: 'MiniFASNet', recognition: 'ArcFace' }, available: {} })
+const evaluationRows = ref([])
+const modelError = ref('')
+const switchingModels = ref(false)
 
 let pollTimer = null
 let positionRequestActive = false
@@ -69,6 +73,12 @@ async function recognizeCurrentFace() {
     if (!frame) return
     const res = await authenticateFace({ imageBase64: frame })
     result.value = res
+    evaluationRows.value = [{
+      id: `${Date.now()}-${Math.random()}`, timestamp: new Date().toLocaleTimeString(),
+      models: res.models || modelStatus.value.active, visibility: res.face_visibility_score,
+      similarity: res.similarity_score, liveness: res.liveness_score, timings: res.step_latencies_ms || {},
+      total: res.step_latencies_ms?.total ?? res.latency_ms, person: res.name || '—', decision: res.authenticated ? 'Accepted' : 'Rejected',
+    }, ...evaluationRows.value].slice(0, 100)
     errorMessage.value = ''
     scanState.value = res.authenticated ? 'success' : 'danger'
     guidance.value = res.message
@@ -82,6 +92,29 @@ async function recognizeCurrentFace() {
     schedulePositionCheck(RESULT_COOLDOWN_MS)
   }
 }
+
+async function changeModel(stage, event) {
+  const previous = modelStatus.value.active[stage]
+  const selected = event.target.value
+  if (selected === previous) return
+  switchingModels.value = true
+  modelError.value = ''
+  try {
+    modelStatus.value = await setActiveModels({ [stage]: selected })
+  } catch (err) {
+    modelError.value = err.message || 'Model change failed.'
+    event.target.value = previous
+  } finally {
+    switchingModels.value = false
+  }
+}
+
+function optionsFor(stage) { return modelStatus.value.available?.[stage] || [] }
+function percent(value, digits = 2) { return value == null ? '—' : `${(value * 100).toFixed(digits)}%` }
+
+onMounted(async () => {
+  try { modelStatus.value = await getModelStatus() } catch (err) { modelError.value = err.message || 'Could not load models.' }
+})
 
 function handleCameraError(message) {
   errorMessage.value = message
@@ -106,6 +139,22 @@ onBeforeUnmount(() => {
       </p>
     </div>
 
+    <section class="model-panel" aria-label="Live model selection">
+      <div>
+        <p class="panel-label">Active pipeline</p>
+        <p class="panel-note">Changes apply to the next processed frame.</p>
+      </div>
+      <label v-for="stage in ['detection', 'liveness', 'recognition']" :key="stage" class="model-field">
+        <span>{{ stage }} model</span>
+        <select :value="modelStatus.active[stage]" :disabled="switchingModels" @change="changeModel(stage, $event)">
+          <option v-for="option in optionsFor(stage)" :key="option.name" :value="option.name" :disabled="!option.available">
+            {{ option.name }}{{ option.available ? '' : ' (not configured)' }}
+          </option>
+        </select>
+      </label>
+      <p v-if="modelError" class="model-error">{{ modelError }}</p>
+    </section>
+
     <div class="layout">
       <div class="camera-col">
         <CameraCapture ref="cameraRef" :state="scanState" @camera-ready="schedulePositionCheck(0)" @camera-error="handleCameraError" />
@@ -121,12 +170,12 @@ onBeforeUnmount(() => {
           <p class="result-title">Authenticated</p>
           <p class="result-name">{{ result.name }}</p>
           <dl class="metric-grid">
-            <dt>Similarity</dt>
-            <dd class="mono">{{ result.similarity_score?.toFixed(3) }}</dd>
-            <dt>Liveness</dt>
-            <dd class="mono">{{ result.liveness_score?.toFixed(3) }}</dd>
-            <dt>Latency</dt>
-            <dd class="mono">{{ result.latency_ms?.toFixed(1) }} ms</dd>
+            <dt>Face Visibility</dt>
+            <dd class="mono">{{ percent(result.face_visibility_score, 0) }}</dd>
+            <dt>Similarity Score</dt>
+            <dd class="mono">{{ percent(result.similarity_score) }}</dd>
+            <dt>Liveness Score</dt>
+            <dd class="mono">{{ percent(result.liveness_score) }}</dd>
             <dt>Detection</dt>
             <dd class="mono">{{ result.step_latencies_ms?.detection?.toFixed(1) ?? '—' }} ms</dd>
             <dt>Alignment</dt>
@@ -135,6 +184,8 @@ onBeforeUnmount(() => {
             <dd class="mono">{{ result.step_latencies_ms?.liveness?.toFixed(1) ?? '—' }} ms</dd>
             <dt>Recognition</dt>
             <dd class="mono">{{ result.step_latencies_ms?.recognition?.toFixed(1) ?? '—' }} ms</dd>
+            <dt>Total Latency</dt>
+            <dd class="mono">{{ result.step_latencies_ms?.total?.toFixed(1) ?? result.latency_ms?.toFixed(1) }} ms</dd>
           </dl>
         </div>
 
@@ -147,11 +198,11 @@ onBeforeUnmount(() => {
             </template>
             <template v-if="result.similarity_score != null">
               <dt>Similarity</dt>
-              <dd class="mono">{{ result.similarity_score.toFixed(3) }}</dd>
+              <dd class="mono">{{ percent(result.similarity_score) }}</dd>
             </template>
             <template v-if="result.liveness_score != null">
               <dt>Liveness</dt>
-              <dd class="mono">{{ result.liveness_score.toFixed(3) }}</dd>
+              <dd class="mono">{{ percent(result.liveness_score) }}</dd>
             </template>
             <dt>Latency</dt>
             <dd class="mono">{{ result.latency_ms?.toFixed(1) }} ms</dd>
@@ -172,13 +223,33 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+    <section class="evaluation-panel">
+      <div class="evaluation-heading">
+        <div><p class="panel-label">Real-time evaluation</p><p class="panel-note">Latest 100 verification inferences.</p></div>
+        <span class="row-count">{{ evaluationRows.length }} records</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Detection</th><th>Liveness</th><th>Recognition</th><th>Visibility</th><th>Similarity</th><th>Live score</th><th>Detect</th><th>Align</th><th>Live</th><th>Recognize</th><th>Total</th><th>Person</th><th>Decision</th></tr></thead>
+          <tbody>
+            <tr v-if="!evaluationRows.length"><td colspan="14" class="empty-row">Verification results will appear here.</td></tr>
+            <tr v-for="row in evaluationRows" :key="row.id">
+              <td>{{ row.timestamp }}</td><td>{{ row.models.detection }}</td><td>{{ row.models.liveness }}</td><td>{{ row.models.recognition }}</td>
+              <td>{{ percent(row.visibility, 0) }}</td><td>{{ percent(row.similarity) }}</td><td>{{ percent(row.liveness) }}</td>
+              <td>{{ row.timings.detection?.toFixed(1) ?? '—' }}</td><td>{{ row.timings.alignment?.toFixed(1) ?? '—' }}</td><td>{{ row.timings.liveness?.toFixed(1) ?? '—' }}</td><td>{{ row.timings.recognition?.toFixed(1) ?? '—' }}</td><td>{{ row.total?.toFixed(1) ?? '—' }}</td><td>{{ row.person }}</td><td :class="row.decision === 'Accepted' ? 'accepted' : 'rejected'">{{ row.decision }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </div>
 </template>
 
 <style scoped>
 .page {
   width: 100%;
-  max-width: 980px;
+  max-width: 1500px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -214,7 +285,24 @@ h1 {
   grid-template-columns: 1fr 1fr;
   gap: 28px;
   align-items: start;
+  max-width: 980px;
 }
+
+.model-panel, .evaluation-panel { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); padding: 18px; }
+.model-panel { display: grid; grid-template-columns: 1.25fr repeat(3, 1fr); gap: 14px; align-items: end; }
+.panel-label { margin: 0; font-family: var(--font-display); font-weight: 600; }
+.panel-note { margin: 4px 0 0; color: var(--text-muted); font-size: .78rem; }
+.model-field { display: flex; flex-direction: column; gap: 6px; color: var(--text-muted); font-size: .74rem; text-transform: capitalize; }
+select { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-raised); color: var(--text-primary); padding: 9px; }
+.model-error { grid-column: 1 / -1; margin: 0; color: var(--danger); font-size: .82rem; }
+.evaluation-panel { display: flex; flex-direction: column; gap: 14px; }
+.evaluation-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.row-count { color: var(--text-faint); font: .75rem var(--font-mono); }
+.table-wrap { height: min(62vh, 680px); min-height: 480px; overflow: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
+table { min-width: 1280px; width: 100%; border-collapse: collapse; font: .72rem var(--font-mono); white-space: nowrap; }
+th, td { padding: 9px 10px; border-bottom: 1px solid var(--border-soft); text-align: left; }
+th { position: sticky; top: 0; background: var(--panel-raised); color: var(--text-muted); font-weight: 500; }
+.empty-row { text-align: center; color: var(--text-faint); padding: 28px; }.accepted { color: var(--success); }.rejected { color: var(--danger); }
 
 .camera-col {
   display: flex;
@@ -366,7 +454,10 @@ h1 {
 @media (max-width: 760px) {
   .layout {
     grid-template-columns: 1fr;
+    max-width: none;
   }
+  .model-panel { grid-template-columns: 1fr; }
+  .table-wrap { height: 55vh; min-height: 360px; }
   .result-col {
     min-height: 220px;
   }

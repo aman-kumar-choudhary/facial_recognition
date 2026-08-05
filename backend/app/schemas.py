@@ -31,6 +31,7 @@ class AuthenticateResponse(BaseModel):
     similarity_score: Optional[float] = None
     liveness_score: Optional[float] = None
     face_visibility_score: Optional[float] = None
+    models: dict[str, str] = Field(default_factory=dict)
     latency_ms: float
     step_latencies_ms: dict[str, float] = Field(default_factory=dict)
     message: str
@@ -40,6 +41,17 @@ class FacePositionResponse(BaseModel):
     state: str
     message: str
     face_count: int
+
+
+class ModelSelectionRequest(BaseModel):
+    detection: Optional[str] = None
+    liveness: Optional[str] = None
+    recognition: Optional[str] = None
+
+
+class ModelStatusResponse(BaseModel):
+    active: dict[str, str]
+    available: dict[str, list[dict[str, object]]]
 
 
 class ErrorResponse(BaseModel):

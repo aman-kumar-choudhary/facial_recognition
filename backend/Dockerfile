@@ -2,9 +2,12 @@
 # mounted by the root docker-compose.yml, never written into this image.
 FROM python:3.11-slim AS runtime
 
+# CUDA libraries installed by pip are not on the dynamic linker path by
+# default in the slim Python image.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib
 
 WORKDIR /app
 
@@ -13,7 +16,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+RUN pip install uv
+RUN uv pip install --system -r requirements.txt
 
 COPY app ./app
 COPY models ./models

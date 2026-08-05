@@ -61,7 +61,9 @@ src/
 ## Notes
 
 - Camera capture requires a secure context (`https://` or `localhost`) —
-  browsers block `getUserMedia` on plain `http://` for any other host.
+  browsers block `getUserMedia` on plain `http://` for any other host. Camera
+  access is requested from the device which opens the page, so a phone needs
+  to reach the app over HTTPS before it can use that phone's camera.
 - CORS: the backend's `app/main.py` currently allows all origins for
   prototype convenience; restrict `allow_origins` before any real deployment.
 - Position checks run at a bounded cadence and never overlap. Full liveness

@@ -11,10 +11,28 @@ aiosqlite==0.20.0
 redis==5.0.8
 
 insightface==0.7.3
-onnxruntime==1.19.2
+# ONNX 1.19 expects ml_dtypes float4 types unavailable in TensorFlow 2.16's
+# compatible ml-dtypes 0.3.x package. This keeps InsightFace importable.
+onnx==1.16.2
+# Keep ONNX's loose transitive requirements aligned with TensorFlow and FAISS.
+protobuf==4.25.9
+onnxruntime-gpu==1.19.2
+
+nvidia-cuda-runtime-cu12
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
+
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
 faiss-cpu==1.8.0.post1
-Pillow==10.4.0
+Pillow==10.2.0
+
+torch==2.4.1
+torchvision==0.19.1
+
+tensorflow==2.16.1
+
+retina-face==0.0.17
+deepface==0.0.93
 
 python-dotenv==1.0.1

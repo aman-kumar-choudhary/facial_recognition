@@ -24,6 +24,7 @@ from app.ml.face_align import align_face
 from app.ml.face_recognizer import FaceRecognizer
 from app.ml.liveness import LivenessDetector
 from app.ml.face_visibility import FaceVisibilityEstimator
+from app.ml.model_manager import ModelManager
 
 
 @dataclass
@@ -31,6 +32,7 @@ class RegistrationResult:
     embeddings: dict[str, np.ndarray]
     quality_score: float
     timings: dict[str, float]
+    models: dict[str, str]
 
 
 @dataclass
@@ -44,6 +46,7 @@ class FaceVisibilityRejected(Exception):
     score: float
     threshold: float
     timings: dict[str, float] | None = None
+    feature_scores: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -57,17 +60,16 @@ logger = logging.getLogger(__name__)
 
 
 class FacePipeline:
-    def __init__(self, detector: FaceDetector, recognizer: FaceRecognizer, liveness: LivenessDetector):
-        self._detector = detector
-        self._recognizer = recognizer
-        self._liveness = liveness
+    def __init__(self, model_manager: ModelManager):
+        self._models = model_manager
         self._visibility = FaceVisibilityEstimator()
 
     def process_for_registration(self, image_bgr: np.ndarray) -> RegistrationResult:
         started = time.perf_counter()
+        models = self._models.snapshot()
         timings: dict[str, float] = {}
         stage_started = time.perf_counter()
-        face = self._detector.detect_single(image_bgr)
+        face = models.detector.detect_single(image_bgr)
         timings["detection"] = self._elapsed(stage_started)
         # Enrollment captures are user-guided and must not be blocked by the
         # passive anti-spoof model. MiniFASNet is deliberately applied only
@@ -76,7 +78,7 @@ class FacePipeline:
         color_aligned, grayscale_aligned = self._aligned_variants(image_bgr, face)
         timings["alignment"] = self._elapsed(stage_started)
         stage_started = time.perf_counter()
-        embeddings = self._base_embeddings(color_aligned, grayscale_aligned)
+        embeddings = self._base_embeddings(models.recognizer, color_aligned, grayscale_aligned)
         timings["recognition"] = self._elapsed(stage_started)
         logger.info(
             "registration_embeddings_generated",
@@ -90,30 +92,48 @@ class FacePipeline:
             embeddings=embeddings,
             quality_score=face.det_score,
             timings=timings,
+            models={"detection": models.detection, "liveness": models.liveness, "recognition": models.recognition},
         )
 
-    def process_for_authentication(self, image_bgr: np.ndarray) -> tuple[dict[str, np.ndarray], DetectedFace, float, dict[str, float]]:
+    def process_for_authentication(self, image_bgr: np.ndarray) -> tuple[dict[str, np.ndarray], DetectedFace, float, float, dict[str, float], dict[str, str]]:
         """Returns configured embeddings, detected_face, and liveness score.
         Raises NoFaceDetectedError / MultipleFacesDetectedError from
         face_detector, FaceVisibilityRejected for an occluded face, or
         LivenessRejected if the face fails liveness."""
         started = time.perf_counter()
+        models = self._models.snapshot()
         timings: dict[str, float] = {}
         stage_started = time.perf_counter()
-        face = self._detector.detect_single(image_bgr)
+        face = models.detector.detect_single(image_bgr)
         timings["detection"] = self._elapsed(stage_started)
 
         stage_started = time.perf_counter()
         visibility = self._visibility.assess(image_bgr, face)
         timings["visibility"] = self._elapsed(stage_started)
-        if visibility.score < settings.FACE_VISIBILITY_THRESHOLD:
-            raise FaceVisibilityRejected(visibility.score, settings.FACE_VISIBILITY_THRESHOLD, timings)
+        visibility_accepted = visibility.score >= settings.FACE_VISIBILITY_THRESHOLD
+        logger.info(
+            "face_visibility_assessed",
+            extra={
+                "event": "face_visibility_assessed",
+                "score": visibility.score,
+                "threshold": settings.FACE_VISIBILITY_THRESHOLD,
+                "accepted": visibility_accepted,
+                "feature_scores": visibility.feature_scores,
+            },
+        )
+        if not visibility_accepted:
+            raise FaceVisibilityRejected(
+                visibility.score,
+                settings.FACE_VISIBILITY_THRESHOLD,
+                timings,
+                visibility.feature_scores,
+            )
 
         # Use exactly the SCRFD detection that will be aligned for ArcFace.
         # Silent-Face needs the original frame plus this bbox, not the aligned
         # 112x112 ArcFace image or a tightly-clipped face.
         stage_started = time.perf_counter()
-        is_live, liveness_score = self._liveness.predict(image_bgr, face.bbox)
+        is_live, liveness_score = models.liveness_detector.predict(image_bgr, face.bbox)
         timings["liveness"] = self._elapsed(stage_started)
         if not is_live:
             raise LivenessRejected(liveness_score, timings)
@@ -122,7 +142,7 @@ class FacePipeline:
         color_aligned, grayscale_aligned = self._aligned_variants(image_bgr, face)
         timings["alignment"] = self._elapsed(stage_started)
         stage_started = time.perf_counter()
-        embeddings = self._base_embeddings(color_aligned, grayscale_aligned)
+        embeddings = self._base_embeddings(models.recognizer, color_aligned, grayscale_aligned)
         timings["recognition"] = self._elapsed(stage_started)
         logger.debug(
             "authentication_embeddings_generated",
@@ -132,7 +152,7 @@ class FacePipeline:
                 "step_latencies_ms": timings,
             },
         )
-        return embeddings, face, liveness_score, timings
+        return embeddings, face, visibility.score, liveness_score, timings, {"detection": models.detection, "liveness": models.liveness, "recognition": models.recognition}
 
     def _aligned_variants(self, image_bgr: np.ndarray, face: DetectedFace) -> tuple[np.ndarray | None, np.ndarray | None]:
         mode = settings.IMAGE_STORAGE_MODE
@@ -142,13 +162,13 @@ class FacePipeline:
             grayscale_aligned = align_face(self._as_grayscale_bgr(image_bgr), face.landmarks)
         return color_aligned, grayscale_aligned
 
-    def _base_embeddings(self, color_aligned: np.ndarray | None, grayscale_aligned: np.ndarray | None) -> dict[str, np.ndarray]:
+    def _base_embeddings(self, recognizer: FaceRecognizer, color_aligned: np.ndarray | None, grayscale_aligned: np.ndarray | None) -> dict[str, np.ndarray]:
         """Return only the configured representation(s) for one pose."""
         embeddings: dict[str, np.ndarray] = {}
         if color_aligned is not None:
-            embeddings["color"] = self._recognizer.get_embedding(color_aligned)
+            embeddings["color"] = recognizer.get_embedding(color_aligned)
         if grayscale_aligned is not None:
-            embeddings["grayscale"] = self._recognizer.get_embedding(grayscale_aligned)
+            embeddings["grayscale"] = recognizer.get_embedding(grayscale_aligned)
         return embeddings
 
     @staticmethod
@@ -162,13 +182,19 @@ class FacePipeline:
         checks still happen in ``process_for_authentication`` only after the
         face has been consistently centred in the browser viewfinder.
         """
-        faces = self._detector.detect(image_bgr)
+        faces = self._models.snapshot().detector.detect(image_bgr)
         if not faces:
             return PositionAssessment("no_face", "No face detected", 0)
         if len(faces) != 1:
             return PositionAssessment("misaligned", "Keep only one face in the frame", len(faces))
 
         face = faces[0]
+        visibility = self._visibility.assess(image_bgr, face)
+        # Profile captures intentionally have asymmetric landmarks.  The
+        # complete-face visibility policy applies to the frontal verification
+        # capture; registration still permits its guided side poses.
+        if pose == "center" and visibility.score < settings.FACE_VISIBILITY_THRESHOLD:
+            return PositionAssessment("misaligned", "Show your complete face inside the oval", 1)
         height, width = image_bgr.shape[:2]
         x1, y1, x2, y2 = (float(value) for value in face.bbox)
         face_width, face_height = x2 - x1, y2 - y1

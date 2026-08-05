@@ -4,6 +4,7 @@ All configuration is loaded from the .env file.
 Application startup will fail if any required environment variable is missing.
 """
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator
@@ -56,6 +57,9 @@ class Settings(BaseSettings):
     # partial-face use case while still requiring a meaningful ArcFace match.
     COSINE_SIMILARITY_THRESHOLD: float = Field(default="")
     INSIGHTFACE_MODEL_ROOT: str = Field(...)
+    # Every optional backend stores its downloaded weights below this folder.
+    # It is deliberately separate from /app/data, which is user data.
+    MODEL_ROOT: str = Field(default="./models")
 
     # Select which representation is persisted and searched.  ``both`` is
     # the legacy/default behaviour and therefore remains backward compatible.
@@ -64,6 +68,21 @@ class Settings(BaseSettings):
     # Minimum estimated proportion of facial features that must be visible
     # before liveness and recognition are allowed to run.
     FACE_VISIBILITY_THRESHOLD: float = Field(default=0.80, ge=0.0, le=1.0)
+    # A face that reaches the image edge is usually a cropped/partial capture.
+    # This is expressed relative to the shortest image side, so it works for
+    # portrait and landscape camera streams alike.
+    FACE_VISIBILITY_FRAME_MARGIN_RATIO: float = Field(default=0.025, ge=0.0, le=0.20)
+    # Reject a detector result whose five landmarks do not form a plausible
+    # face.  This is intentionally a broad geometric sanity check, not a
+    # skin-colour or dark-pixel heuristic.
+    FACE_VISIBILITY_MIN_LANDMARK_SPREAD_RATIO: float = Field(default=0.18, gt=0.0, le=1.0)
+
+    # Per-feature evidence floors, measured relative to the detected face's
+    # own exposure. They directly control the visibility score and are logged
+    # on every authentication decision for camera-specific calibration.
+    FACE_VISIBILITY_EYE_DARK_PIXEL_RATIO: float = Field(default=0.30, ge=0.0, le=1.0)
+    FACE_VISIBILITY_NOSE_DARK_PIXEL_RATIO: float = Field(default=0.20, ge=0.0, le=1.0)
+    FACE_VISIBILITY_MOUTH_DARK_PIXEL_RATIO: float = Field(default=0.40, ge=0.0, le=1.0)
 
     # --- Passive liveness (Silent-Face / MiniFASNet ONNX) ---
     # LIVENESS_MODEL_PATH is kept for deployments that use one legacy model.
@@ -71,11 +90,27 @@ class Settings(BaseSettings):
     LIVENESS_MODEL_PATH: str = Field(default="")
     LIVENESS_MODEL_PATHS: str = Field(default="")
     LIVENESS_MODEL_SCALES: str = Field(default="")
-    LIVENESS_REAL_CLASS_INDEX: int = Field(default=1)
-    # MiniFASNet scores are camera/domain dependent; this calibrated default
-    # rejects clear spoof scores while avoiding false rejections of live RGB
-    # webcam frames.
-    LIVENESS_THRESHOLD: float = Field(default="")
+    # The configured MiniFASNet exports use class 1 for a bona-fide face.
+    LIVENESS_REAL_CLASS_INDEX: int = Field(default=1, ge=0)
+    # A real class must win the fused ensemble and meet this confidence. 0.50
+    # is the model's natural three-class decision boundary, not a bypass.
+    LIVENESS_THRESHOLD: float = Field(default=0.50, gt=0.0, lt=1.0)
+
+    # Optional plug-in model locations.  The bundled deployment keeps the
+    # established SCRFD / MiniFASNet / ArcFace trio as its default.  Supplying
+    # one of these paths makes that named model selectable at runtime.
+    RETINAFACE_MODEL_PATH: str = Field(default="")
+    MTCNN_MODEL_PATH: str = Field(default="")
+    CDCN_MODEL_PATH: str = Field(default="")
+    FACENET_MODEL_PATH: str = Field(default="")
+    DEEPFACE_MODEL_PATH: str = Field(default="")
+    VGGFACE2_MODEL_PATH: str = Field(default="")
+
+    # CDCN has no standard, maintained ONNX export.  A deployment that opts
+    # into it must supply a calibrated binary [spoof, live] ONNX classifier.
+    CDCN_CROP_SCALE: float = Field(default=2.7, gt=1.0)
+    CDCN_REAL_CLASS_INDEX: int = Field(default=1, ge=0)
+    CDCN_THRESHOLD: float = Field(default=0.50, gt=0.0, lt=1.0)
 
     # --- Runtime ---
     MAX_UPLOAD_IMAGE_MB: int = Field(...)
@@ -87,6 +122,10 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_image_storage_mode(cls, value: object) -> str:
         return str(value).strip().lower()
+
+    @property
+    def model_root_path(self) -> Path:
+        return Path(self.MODEL_ROOT).resolve()
 
 
 settings = Settings()

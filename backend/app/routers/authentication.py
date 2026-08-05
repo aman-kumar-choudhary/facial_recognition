@@ -56,7 +56,7 @@ async def authenticate(
     pipeline = request.app.state.pipeline
 
     try:
-        embeddings, _face, liveness_score, step_timings = await run_in_threadpool(
+        embeddings, _face, visibility_score, liveness_score, step_timings, models = await run_in_threadpool(
             pipeline.process_for_authentication, image_bgr
         )
     except NoFaceDetectedError as exc:
@@ -72,7 +72,7 @@ async def authenticate(
         write_auth_audit(authenticated=False, student_id=None, reason="face_partially_occluded", similarity_score=None, liveness_score=None, timings=step_timings, total_ms=elapsed_ms)
         logger.info(
             "recognition_result",
-            extra={"event": "recognition_result", "authenticated": False, "reason": "face_partially_occluded", "face_visibility_score": exc.score, "face_visibility_threshold": exc.threshold, "latency_ms": round(elapsed_ms, 2), "step_latencies_ms": step_timings},
+            extra={"event": "recognition_result", "authenticated": False, "reason": "face_partially_occluded", "face_visibility_score": exc.score, "face_visibility_threshold": exc.threshold, "face_visibility_features": exc.feature_scores or {}, "latency_ms": round(elapsed_ms, 2), "step_latencies_ms": step_timings},
         )
         return AuthenticateResponse(
             authenticated=False,
@@ -100,7 +100,7 @@ async def authenticate(
             message="Spoof detected -- liveness check failed",
         )
 
-    vector_store = get_vector_store()
+    vector_store = get_vector_store(models["recognition"])
     recognition_started = time.perf_counter()
     # Search each capture representation against both enrolled variants and
     # retain the best score for each student. This supports color, grayscale,
@@ -111,6 +111,10 @@ async def authenticate(
             match_scores[student_id] = max(match_scores.get(student_id, -1.0), score)
     matches = sorted(match_scores.items(), key=lambda item: item[1], reverse=True)
     step_timings["recognition"] = round(step_timings.get("recognition", 0) + (time.perf_counter() - recognition_started) * 1000, 2)
+    # This is deliberately separate from API wall time: it is exactly the
+    # sum of the requested model stages and is the benchmark value shown in
+    # the dashboard.  ``latency_ms`` remains backward-compatible API time.
+    step_timings["total"] = round(sum(step_timings.get(stage, 0) for stage in ("detection", "alignment", "liveness", "recognition")), 2)
     elapsed_ms = (time.perf_counter() - start) * 1000
 
     if not matches:
@@ -122,6 +126,8 @@ async def authenticate(
         return AuthenticateResponse(
             authenticated=False,
             liveness_score=liveness_score,
+            face_visibility_score=visibility_score,
+            models=models,
             latency_ms=round(elapsed_ms, 2),
             step_latencies_ms=step_timings,
             message="User Not Recognized",
@@ -142,6 +148,8 @@ async def authenticate(
             authenticated=False,
             similarity_score=round(similarity, 4),
             liveness_score=liveness_score,
+            face_visibility_score=visibility_score,
+            models=models,
             latency_ms=round(elapsed_ms, 2),
             step_latencies_ms=step_timings,
             message="User Not Recognized",
@@ -165,6 +173,8 @@ async def authenticate(
                 authenticated=False,
                 similarity_score=round(similarity, 4),
                 liveness_score=liveness_score,
+                face_visibility_score=visibility_score,
+                models=models,
                 latency_ms=round(elapsed_ms, 2),
                 step_latencies_ms=step_timings,
                 message="User Not Recognized",
@@ -181,7 +191,7 @@ async def authenticate(
         "recognition_result",
         extra={
             "event": "recognition_result", "authenticated": True, "student_id": student_id,
-            "similarity_score": round(similarity, 4), "runner_up_similarity": round(runner_up_similarity, 4) if runner_up_similarity is not None else None, "liveness_score": round(liveness_score, 4), "latency_ms": round(elapsed_ms, 2), "step_latencies_ms": step_timings,
+            "models": models, "face_visibility_score": round(visibility_score, 4), "similarity_score": round(similarity, 4), "runner_up_similarity": round(runner_up_similarity, 4) if runner_up_similarity is not None else None, "liveness_score": round(liveness_score, 4), "latency_ms": round(elapsed_ms, 2), "step_latencies_ms": step_timings,
         },
     )
     write_auth_audit(authenticated=True, student_id=student_id, reason="authenticated", similarity_score=similarity, liveness_score=liveness_score, timings=step_timings, total_ms=elapsed_ms)
@@ -192,6 +202,8 @@ async def authenticate(
         name=name,
         similarity_score=round(similarity, 4),
         liveness_score=liveness_score,
+        face_visibility_score=visibility_score,
+        models=models,
         latency_ms=round(elapsed_ms, 2),
         step_latencies_ms=step_timings,
         message="Authenticated",

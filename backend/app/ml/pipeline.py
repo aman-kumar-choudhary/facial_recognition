@@ -68,9 +68,9 @@ class FacePipeline:
         started = time.perf_counter()
         models = self._models.snapshot()
         timings: dict[str, float] = {}
-        stage_started = time.perf_counter()
-        face = models.detector.detect_single(image_bgr)
-        timings["detection"] = self._elapsed(stage_started)
+        with self._models.metrics.measure_inference(models.detection, "detection") as measurement:
+            face = models.detector.detect_single(image_bgr)
+        timings["detection"] = measurement.latency_ms or 0.0
         # Enrollment captures are user-guided and must not be blocked by the
         # passive anti-spoof model. MiniFASNet is deliberately applied only
         # during verification, where it protects the identity decision.
@@ -78,7 +78,7 @@ class FacePipeline:
         color_aligned, grayscale_aligned = self._aligned_variants(image_bgr, face)
         timings["alignment"] = self._elapsed(stage_started)
         stage_started = time.perf_counter()
-        embeddings = self._base_embeddings(models.recognizer, color_aligned, grayscale_aligned)
+        embeddings = self._base_embeddings(models.recognizer, color_aligned, grayscale_aligned, models.recognition)
         timings["recognition"] = self._elapsed(stage_started)
         logger.info(
             "registration_embeddings_generated",
@@ -103,9 +103,9 @@ class FacePipeline:
         started = time.perf_counter()
         models = self._models.snapshot()
         timings: dict[str, float] = {}
-        stage_started = time.perf_counter()
-        face = models.detector.detect_single(image_bgr)
-        timings["detection"] = self._elapsed(stage_started)
+        with self._models.metrics.measure_inference(models.detection, "detection") as measurement:
+            face = models.detector.detect_single(image_bgr)
+        timings["detection"] = measurement.latency_ms or 0.0
 
         stage_started = time.perf_counter()
         visibility = self._visibility.assess(image_bgr, face)
@@ -132,9 +132,9 @@ class FacePipeline:
         # Use exactly the SCRFD detection that will be aligned for ArcFace.
         # Silent-Face needs the original frame plus this bbox, not the aligned
         # 112x112 ArcFace image or a tightly-clipped face.
-        stage_started = time.perf_counter()
-        is_live, liveness_score = models.liveness_detector.predict(image_bgr, face.bbox)
-        timings["liveness"] = self._elapsed(stage_started)
+        with self._models.metrics.measure_inference(models.liveness, "liveness") as measurement:
+            is_live, liveness_score = models.liveness_detector.predict(image_bgr, face.bbox)
+        timings["liveness"] = measurement.latency_ms or 0.0
         if not is_live:
             raise LivenessRejected(liveness_score, timings)
 
@@ -142,7 +142,7 @@ class FacePipeline:
         color_aligned, grayscale_aligned = self._aligned_variants(image_bgr, face)
         timings["alignment"] = self._elapsed(stage_started)
         stage_started = time.perf_counter()
-        embeddings = self._base_embeddings(models.recognizer, color_aligned, grayscale_aligned)
+        embeddings = self._base_embeddings(models.recognizer, color_aligned, grayscale_aligned, models.recognition)
         timings["recognition"] = self._elapsed(stage_started)
         logger.debug(
             "authentication_embeddings_generated",
@@ -162,13 +162,15 @@ class FacePipeline:
             grayscale_aligned = align_face(self._as_grayscale_bgr(image_bgr), face.landmarks)
         return color_aligned, grayscale_aligned
 
-    def _base_embeddings(self, recognizer: FaceRecognizer, color_aligned: np.ndarray | None, grayscale_aligned: np.ndarray | None) -> dict[str, np.ndarray]:
+    def _base_embeddings(self, recognizer: FaceRecognizer, color_aligned: np.ndarray | None, grayscale_aligned: np.ndarray | None, model_name: str) -> dict[str, np.ndarray]:
         """Return only the configured representation(s) for one pose."""
         embeddings: dict[str, np.ndarray] = {}
         if color_aligned is not None:
-            embeddings["color"] = recognizer.get_embedding(color_aligned)
+            with self._models.metrics.measure_inference(model_name, "recognition"):
+                embeddings["color"] = recognizer.get_embedding(color_aligned)
         if grayscale_aligned is not None:
-            embeddings["grayscale"] = recognizer.get_embedding(grayscale_aligned)
+            with self._models.metrics.measure_inference(model_name, "recognition"):
+                embeddings["grayscale"] = recognizer.get_embedding(grayscale_aligned)
         return embeddings
 
     @staticmethod

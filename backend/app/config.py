@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     VECTOR_INDEX_PATH: str = Field(...)
     VECTOR_META_PATH: str = Field(...)
     EMBEDDING_DIM: int = Field(...)
+    # FAISS_DEVICE=auto uses a GPU clone when the installed FAISS build and
+    # CUDA driver support it; CPU remains the safe fallback.
+    FAISS_DEVICE: Literal["auto", "cpu", "gpu"] = Field(default="auto")
+    FAISS_GPU_DEVICE: int = Field(default=0, ge=0)
+    FAISS_CANDIDATE_COUNT: int = Field(default=64, ge=1, le=10000)
 
     # --- Face Detection ---
     # Deprecated compatibility setting. Detection now comes from
@@ -67,22 +72,23 @@ class Settings(BaseSettings):
 
     # Minimum estimated proportion of facial features that must be visible
     # before liveness and recognition are allowed to run.
-    FACE_VISIBILITY_THRESHOLD: float = Field(default=0.80, ge=0.0, le=1.0)
+    FACE_VISIBILITY_THRESHOLD: float = Field(default="", ge=0.0, le=1.0)
     # A face that reaches the image edge is usually a cropped/partial capture.
     # This is expressed relative to the shortest image side, so it works for
     # portrait and landscape camera streams alike.
-    FACE_VISIBILITY_FRAME_MARGIN_RATIO: float = Field(default=0.025, ge=0.0, le=0.20)
+    FACE_VISIBILITY_FRAME_MARGIN_RATIO: float = Field(default="", ge=0.0, le=0.20)
     # Reject a detector result whose five landmarks do not form a plausible
     # face.  This is intentionally a broad geometric sanity check, not a
     # skin-colour or dark-pixel heuristic.
-    FACE_VISIBILITY_MIN_LANDMARK_SPREAD_RATIO: float = Field(default=0.18, gt=0.0, le=1.0)
+    FACE_VISIBILITY_MIN_LANDMARK_SPREAD_RATIO: float = Field(default="", gt=0.0, le=1.0)
 
-    # Per-feature evidence floors, measured relative to the detected face's
-    # own exposure. They directly control the visibility score and are logged
-    # on every authentication decision for camera-specific calibration.
-    FACE_VISIBILITY_EYE_DARK_PIXEL_RATIO: float = Field(default=0.30, ge=0.0, le=1.0)
-    FACE_VISIBILITY_NOSE_DARK_PIXEL_RATIO: float = Field(default=0.20, ge=0.0, le=1.0)
-    FACE_VISIBILITY_MOUTH_DARK_PIXEL_RATIO: float = Field(default=0.40, ge=0.0, le=1.0)
+    # Per-feature normalized local-evidence floors. Eye/mouth evidence is
+    # measured as contrast against adjacent skin; nose evidence is measured
+    # as local detail. The legacy environment-variable names are retained so
+    # existing deployments do not lose their calibrated values.
+    FACE_VISIBILITY_EYE_DARK_PIXEL_RATIO: float = Field(default="", ge=0.0, le=1.0)
+    FACE_VISIBILITY_NOSE_DARK_PIXEL_RATIO: float = Field(default="", ge=0.0, le=1.0)
+    FACE_VISIBILITY_MOUTH_DARK_PIXEL_RATIO: float = Field(default="", ge=0.0, le=1.0)
 
     # --- Passive liveness (Silent-Face / MiniFASNet ONNX) ---
     # LIVENESS_MODEL_PATH is kept for deployments that use one legacy model.
@@ -94,7 +100,7 @@ class Settings(BaseSettings):
     LIVENESS_REAL_CLASS_INDEX: int = Field(default=1, ge=0)
     # A real class must win the fused ensemble and meet this confidence. 0.50
     # is the model's natural three-class decision boundary, not a bypass.
-    LIVENESS_THRESHOLD: float = Field(default=0.50, gt=0.0, lt=1.0)
+    LIVENESS_THRESHOLD: float = Field(default="", gt=0.0, lt=1.0)
 
     # Optional plug-in model locations.  The bundled deployment keeps the
     # established SCRFD / MiniFASNet / ArcFace trio as its default.  Supplying
@@ -108,9 +114,9 @@ class Settings(BaseSettings):
 
     # CDCN has no standard, maintained ONNX export.  A deployment that opts
     # into it must supply a calibrated binary [spoof, live] ONNX classifier.
-    CDCN_CROP_SCALE: float = Field(default=2.7, gt=1.0)
+    CDCN_CROP_SCALE: float = Field(default="", gt=1.0)
     CDCN_REAL_CLASS_INDEX: int = Field(default=1, ge=0)
-    CDCN_THRESHOLD: float = Field(default=0.50, gt=0.0, lt=1.0)
+    CDCN_THRESHOLD: float = Field(default="", gt=0.0, lt=1.0)
 
     # --- Runtime ---
     MAX_UPLOAD_IMAGE_MB: int = Field(...)

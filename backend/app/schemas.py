@@ -18,6 +18,46 @@ class StudentRegisterResponse(BaseModel):
     message: str = "Student registered successfully"
 
 
+class StudentFaceUpdateRequest(BaseModel):
+    # Accept one image or a named set of new pose/variant captures. A supplied
+    # set replaces the student's complete enrolled representation atomically.
+    image_base64: Optional[str] = None
+    face_images: Optional[dict[str, str]] = None
+
+
+class StudentFaceUpdateResponse(BaseModel):
+    success: bool
+    student_id: str
+    embedding_updated: bool
+    image_updated: bool
+    similarity_check: Optional[float] = None
+    latency_ms: float
+
+
+class StudentDeleteResponse(BaseModel):
+    success: bool
+    student_id: str
+    database_deleted: bool
+    images_deleted: bool
+    embeddings_deleted: bool
+
+
+class StudentListItem(BaseModel):
+    student_id: str
+    name: str
+    roll_number: str
+    embedding_count: int
+    image_url: Optional[str] = None
+    last_updated: Optional[str] = None
+
+
+class StudentDetailResponse(BaseModel):
+    student_id: str
+    name: str
+    roll_number: str
+    email: EmailStr
+
+
 class AuthenticateRequest(BaseModel):
     image_base64: str = Field(..., description="Base64-encoded JPEG/PNG frame from camera")
     # Used only by the lightweight positioning endpoint during enrollment.
@@ -34,6 +74,7 @@ class AuthenticateResponse(BaseModel):
     models: dict[str, str] = Field(default_factory=dict)
     latency_ms: float
     step_latencies_ms: dict[str, float] = Field(default_factory=dict)
+    reason: Optional[str] = None
     message: str
 
 

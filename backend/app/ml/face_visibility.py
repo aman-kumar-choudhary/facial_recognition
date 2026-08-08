@@ -60,18 +60,13 @@ class FaceVisibilityEstimator:
         face_patch = gray[max(0, int(y1)) : min(height, int(np.ceil(y2))), max(0, int(x1)) : min(width, int(np.ceil(x2)))]
         if face_patch.size == 0:
             return FaceVisibilityAssessment(0.0, {})
-        # Relative exposure avoids a global brightness requirement. The
-        # threshold is derived from this face in this frame, then each feature
-        # is independently checked for the expected eye/nose/mouth evidence.
-        dark_threshold = float(np.clip(np.percentile(face_patch, 65) * 0.75, 45, 115))
         radius = max(5, int(min(face_width, face_height) * 0.105))
         feature_scores: dict[str, float] = {}
         visible_area = 0.0
         for (name, weight, feature_type), landmark in zip(self._FEATURES, landmarks):
-            dark_ratio = self._dark_pixel_ratio(gray, landmark, radius, dark_threshold)
-            required_ratio = self._required_dark_ratio(feature_type)
-            is_visible = dark_ratio >= required_ratio
-            feature_scores[name] = round(dark_ratio, 4)
+            evidence = self._feature_evidence(gray, landmark, radius, feature_type)
+            is_visible = evidence >= self._required_evidence(feature_type)
+            feature_scores[name] = round(evidence, 4)
             if is_visible:
                 visible_area += weight
 
@@ -85,24 +80,53 @@ class FaceVisibilityEstimator:
             "box_coverage": round(box_coverage, 4),
             "frame_margin": round(frame_margin_score, 4),
             "landmark_layout": round(layout_score, 4),
-            "dark_pixel_threshold": round(dark_threshold, 2),
             **feature_scores,
         }
         return FaceVisibilityAssessment(score=round(float(np.clip(score, 0.0, 1.0)), 4), feature_scores=feature_scores)
 
     @staticmethod
-    def _dark_pixel_ratio(gray: np.ndarray, landmark: np.ndarray, radius: int, dark_threshold: float) -> float:
+    def _feature_evidence(gray: np.ndarray, landmark: np.ndarray, radius: int, feature_type: str) -> float:
+        """Measure landmark-local facial detail, independent of exposure.
+
+        SCRFD only returns landmark coordinates, not landmark confidences. A
+        covered feature can consequently retain a plausible coordinate. The
+        old global dark-pixel test incorrectly accepted a dark hand, mask, or
+        shadow as an eye/mouth. Here the centre is compared with its immediate
+        surrounding ring: eyes and mouth need their characteristic dark
+        contrast, and the nose needs local edge detail. Uniform occluders do
+        not satisfy either measurement.
+        """
         x, y = (int(round(value)) for value in landmark)
-        y1, y2 = max(0, y - radius), min(gray.shape[0], y + radius + 1)
-        x1, x2 = max(0, x - radius), min(gray.shape[1], x + radius + 1)
-        patch = gray[y1:y2, x1:x2]
-        if patch.shape[0] < radius or patch.shape[1] < radius:
+        outer_radius = int(radius * 1.8)
+        y1, y2 = max(0, y - outer_radius), min(gray.shape[0], y + outer_radius + 1)
+        x1, x2 = max(0, x - outer_radius), min(gray.shape[1], x + outer_radius + 1)
+        patch = gray[y1:y2, x1:x2].astype(np.float32)
+        if patch.shape[0] < outer_radius or patch.shape[1] < outer_radius:
             return 0.0
-        return float(np.mean(patch < dark_threshold))
+        yy, xx = np.ogrid[y1:y2, x1:x2]
+        distance = np.sqrt((xx - x) ** 2 + (yy - y) ** 2)
+        centre = patch[distance <= radius]
+        ring = patch[(distance >= radius * 1.25) & (distance <= outer_radius)]
+        if centre.size == 0 or ring.size == 0:
+            return 0.0
+        if feature_type in {"eye", "mouth"}:
+            # Contrast relative to the immediately adjacent skin is robust to
+            # dark rooms and darker skin tones, unlike an absolute threshold.
+            contrast = max(0.0, float(np.median(ring) - np.percentile(centre, 30)))
+            return float(np.clip(contrast / 32.0, 0.0, 1.0))
+
+        gradient_x = cv2.Sobel(patch, cv2.CV_32F, 1, 0, ksize=3)
+        gradient_y = cv2.Sobel(patch, cv2.CV_32F, 0, 1, ksize=3)
+        centre_detail = float(np.mean(cv2.magnitude(gradient_x, gradient_y)[distance <= radius]))
+        ring_detail = float(np.mean(cv2.magnitude(gradient_x, gradient_y)[(distance >= radius * 1.25) & (distance <= outer_radius)]))
+        return float(np.clip(max(0.0, centre_detail - ring_detail * 0.55) / 28.0, 0.0, 1.0))
 
     @staticmethod
-    def _required_dark_ratio(feature_type: str) -> float:
+    def _required_evidence(feature_type: str) -> float:
         return {
+            # Keep the existing environment variable names for deployment
+            # compatibility; they now represent normalized local evidence
+            # floors rather than raw dark-pixel ratios.
             "eye": settings.FACE_VISIBILITY_EYE_DARK_PIXEL_RATIO,
             "nose": settings.FACE_VISIBILITY_NOSE_DARK_PIXEL_RATIO,
             "mouth": settings.FACE_VISIBILITY_MOUTH_DARK_PIXEL_RATIO,

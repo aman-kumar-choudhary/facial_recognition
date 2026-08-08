@@ -1,6 +1,9 @@
 import base64
 import binascii
 import logging
+import os
+import shutil
+import uuid
 from pathlib import Path
 
 import cv2
@@ -63,3 +66,57 @@ def save_registration_images(student_id: str, images: dict[str, np.ndarray]) -> 
         raise
     logger.info("registration_images_saved", extra={"event": "registration_images_saved", "student_id": student_id, "pose_count": len(images), "paths": [str(path) for path in paths]})
     return paths
+
+
+class ImageReplacement:
+    """Small filesystem transaction used by face replacement and deletion."""
+    def __init__(self, student_id: str, images: dict[str, np.ndarray] | None = None):
+        self.directory = Path(settings.STUDENT_IMAGE_DIR)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.student_id = student_id
+        self.token = uuid.uuid4().hex
+        self.stage = self.directory / f".stage-{student_id}-{self.token}"
+        self.backup = self.directory / f".backup-{student_id}-{self.token}"
+        self.images = images
+        self.targets: list[Path] = []
+        self.committed = False
+
+    def prepare(self) -> None:
+        self.stage.mkdir()
+        if self.images is not None:
+            for pose, image in self.images.items():
+                if settings.IMAGE_STORAGE_MODE in ("color", "both"):
+                    target = self.directory / f"{self.student_id}_{pose}.jpg"
+                    if not cv2.imwrite(str(self.stage / target.name), image): raise OSError(f"Could not stage image '{pose}'")
+                    self.targets.append(target)
+                if settings.IMAGE_STORAGE_MODE in ("grayscale", "both"):
+                    target = self.directory / f"{self.student_id}_{pose}_gray.jpg"
+                    if not cv2.imwrite(str(self.stage / target.name), cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)): raise OSError(f"Could not stage image '{pose}'")
+                    self.targets.append(target)
+        else:
+            self.targets = list(self.directory.glob(f"{self.student_id}_*.jpg"))
+
+    def commit(self) -> None:
+        self.backup.mkdir(exist_ok=True)
+        # A complete replacement removes old poses that are no longer supplied.
+        old = list(self.directory.glob(f"{self.student_id}_*.jpg"))
+        for path in old:
+            os.replace(path, self.backup / path.name)
+        if self.images is not None:
+            for staged in self.stage.iterdir(): os.replace(staged, self.directory / staged.name)
+        self.committed = True
+
+    def rollback(self) -> None:
+        # Before commit no live image was touched; never delete the existing
+        # enrollment merely because staging/validation failed.
+        if not self.backup.exists() and not self.committed:
+            self.finalize()
+            return
+        for path in self.directory.glob(f"{self.student_id}_*.jpg"): path.unlink(missing_ok=True)
+        if self.backup.exists():
+            for path in self.backup.iterdir(): os.replace(path, self.directory / path.name)
+        self.finalize()
+
+    def finalize(self) -> None:
+        shutil.rmtree(self.stage, ignore_errors=True)
+        shutil.rmtree(self.backup, ignore_errors=True)

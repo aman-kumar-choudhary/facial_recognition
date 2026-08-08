@@ -1,3 +1,7 @@
+# ============================================================
+# FASTAPI / WEB API
+# ============================================================
+
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
@@ -5,34 +9,54 @@ pydantic-settings==2.5.2
 email-validator==2.2.0
 python-multipart==0.0.9
 
+
+# ============================================================
+# DATABASE / CACHE
+# ============================================================
+
 sqlalchemy==2.0.35
 aiosqlite==0.20.0
-
 redis==5.0.8
 
+
+# ============================================================
+# FACE RECOGNITION
+# ============================================================
+
 insightface==0.7.3
-# ONNX 1.19 expects ml_dtypes float4 types unavailable in TensorFlow 2.16's
-# compatible ml-dtypes 0.3.x package. This keeps InsightFace importable.
 onnx==1.16.2
-# Keep ONNX's loose transitive requirements aligned with TensorFlow and FAISS.
-protobuf==4.25.9
 onnxruntime-gpu==1.19.2
 
-nvidia-cuda-runtime-cu12
-nvidia-cublas-cu12
-nvidia-cudnn-cu12
+
+# ============================================================
+# IMAGE PROCESSING
+# ============================================================
 
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
-faiss-cpu==1.8.0.post1
 Pillow==10.2.0
+
+
+# ============================================================
+# FAISS GPU
+# CUDA 12
+# NumPy 1.x compatible
+# ============================================================
+
+faiss-gpu-cu12==1.11.0
+
+
+# ============================================================
+# PYTORCH
+# ============================================================
 
 torch==2.4.1
 torchvision==0.19.1
 
-tensorflow==2.16.1
 
-retina-face==0.0.17
-deepface==0.0.93
+# ============================================================
+# UTILITIES
+# ============================================================
 
 python-dotenv==1.0.1
+psutil==6.0.0

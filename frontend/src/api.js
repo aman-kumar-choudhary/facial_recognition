@@ -53,3 +53,33 @@ export function getModelStatus() {
 export function setActiveModels(models) {
   return postJson('/api/v1/models/active', models, 'PUT')
 }
+
+export async function getStudents(query = '') {
+  const res = await fetch(`${BASE_URL}/api/v1/students${query ? `?q=${encodeURIComponent(query)}` : ''}`)
+  if (!res.ok) throw new Error('Could not load students')
+  return res.json()
+}
+
+export function updateStudentFace(studentId, faceImages) {
+  return postJson(`/api/v1/students/${encodeURIComponent(studentId)}/face`, { face_images: faceImages }, 'PUT')
+}
+
+export async function getStudent(studentId) {
+  const res = await fetch(`${BASE_URL}/api/v1/students/${encodeURIComponent(studentId)}`)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.detail || 'Could not load student')
+  return data
+}
+
+export async function deleteStudent(studentId) {
+  const res = await fetch(`${BASE_URL}/api/v1/students/${encodeURIComponent(studentId)}`, { method: 'DELETE' })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.detail || 'Could not delete student')
+  return body
+}
+
+export async function getSystemStats() {
+  const res = await fetch(`${BASE_URL}/api/v1/monitoring/stats`)
+  if (!res.ok) throw new Error('Could not load system statistics')
+  return res.json()
+}

@@ -17,6 +17,9 @@ const route = useRoute()
         <RouterLink to="/verify" class="tab" :class="{ active: route.name === 'verify' }">
           <span class="tab-index">02</span> Verify
         </RouterLink>
+        <RouterLink to="/manage" class="tab" :class="{ active: route.name === 'manage' }">
+          <span class="tab-index">03</span> Manage
+        </RouterLink>
       </nav>
     </header>
     <main class="content">

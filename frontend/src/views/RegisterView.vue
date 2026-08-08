@@ -1,7 +1,13 @@
 <script setup>
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import CameraCapture from '../components/CameraCapture.vue'
-import { assessFacePosition, registerStudent } from '../api'
+import { assessFacePosition, getStudent, registerStudent, updateStudentFace } from '../api'
+
+const route = useRoute()
+const router = useRouter()
+const updateStudentId = computed(() => typeof route.query.update === 'string' ? route.query.update : '')
+const isUpdate = computed(() => Boolean(updateStudentId.value))
 
 const name = ref('')
 const rollNumber = ref('')
@@ -100,12 +106,9 @@ async function submit() {
   status.value = 'submitting'
   statusMessage.value = ''
   try {
-    const result = await registerStudent({
-      name: name.value.trim(),
-      rollNumber: rollNumber.value.trim(),
-      email: email.value.trim(),
-      enrollmentImages: capturedImages.value,
-    })
+    const result = isUpdate.value
+      ? await updateStudentFace(updateStudentId.value, capturedImages.value)
+      : await registerStudent({ name: name.value.trim(), rollNumber: rollNumber.value.trim(), email: email.value.trim(), enrollmentImages: capturedImages.value })
     registeredStudent.value = result
     status.value = 'success'
   } catch (err) {
@@ -123,7 +126,26 @@ function resetForm() {
   status.value = 'idle'
   statusMessage.value = ''
   registeredStudent.value = null
+  if (isUpdate.value) router.push({ name: 'manage' })
 }
+
+async function loadStudentForUpdate() {
+  if (!isUpdate.value) return
+  status.value = 'submitting'
+  try {
+    const student = await getStudent(updateStudentId.value)
+    name.value = student.name
+    rollNumber.value = student.roll_number
+    email.value = student.email
+    status.value = 'idle'
+    guidance.value = 'Student details loaded. Capture five replacement poses.'
+  } catch (err) {
+    status.value = 'error'
+    statusMessage.value = err.message || 'Could not load student details.'
+  }
+}
+
+onMounted(loadStudentForUpdate)
 
 onBeforeUnmount(() => {
   isActive = false
@@ -135,10 +157,10 @@ onBeforeUnmount(() => {
 <template>
   <div class="page">
     <div class="intro">
-      <p class="eyebrow">Step 01 — Enrollment</p>
-      <h1>Register a student</h1>
+      <p class="eyebrow">Step 01 — {{ isUpdate ? 'Face replacement' : 'Enrollment' }}</p>
+      <h1>{{ isUpdate ? 'Update student face' : 'Register a student' }}</h1>
       <p class="lede">
-        Capture five live poses to improve recognition from different angles.
+        {{ isUpdate ? 'Student identity is locked. Capture five new poses to replace the existing embeddings.' : 'Capture five live poses to improve recognition from different angles.' }}
       </p>
     </div>
 
@@ -170,37 +192,36 @@ onBeforeUnmount(() => {
       <div class="form-col">
         <label class="field">
           <span class="field-label">Full name</span>
-          <input v-model="name" type="text" placeholder="Aarav Sharma" :disabled="status === 'submitting'" />
+          <input v-model="name" type="text" placeholder="Aarav Sharma" :disabled="status === 'submitting' || isUpdate" />
         </label>
 
         <label class="field">
           <span class="field-label">Roll number (Student ID)</span>
-          <input v-model="rollNumber" type="text" placeholder="2026-CS-014" :disabled="status === 'submitting'" />
+          <input v-model="rollNumber" type="text" placeholder="2026-CS-014" :disabled="status === 'submitting' || isUpdate" />
         </label>
 
         <label class="field">
           <span class="field-label">Email</span>
-          <input v-model="email" type="email" placeholder="aarav.sharma@example.edu" :disabled="status === 'submitting'" />
+          <input v-model="email" type="email" placeholder="aarav.sharma@example.edu" :disabled="status === 'submitting' || isUpdate" />
         </label>
 
         <button class="btn primary full" :disabled="!canSubmit" @click="submit">
-          <span v-if="status === 'submitting'">Registering…</span>
-          <span v-else>Register student</span>
+          <span v-if="status === 'submitting'">{{ isUpdate ? 'Updating…' : 'Registering…' }}</span>
+          <span v-else>{{ isUpdate ? 'Replace face embeddings' : 'Register student' }}</span>
         </button>
 
         <p v-if="status === 'error'" class="feedback error">{{ statusMessage }}</p>
 
         <div v-if="status === 'success'" class="feedback success-card">
-          <p class="success-title">Registered</p>
+          <p class="success-title">{{ isUpdate ? 'Face enrollment updated' : 'Registered' }}</p>
           <dl class="result-grid">
-            <dt>Name</dt>
-            <dd>{{ registeredStudent.name }}</dd>
+            <template v-if="!isUpdate"><dt>Name</dt><dd>{{ registeredStudent.name }}</dd></template>
             <dt>Student ID / Roll number</dt>
-            <dd class="mono">{{ registeredStudent.student_id }}</dd>
-            <dt>Capture quality</dt>
-            <dd class="mono">{{ (registeredStudent.embedding_quality_score * 100).toFixed(1) }}%</dd>
+            <dd class="mono">{{ registeredStudent.student_id || updateStudentId }}</dd>
+            <template v-if="!isUpdate"><dt>Capture quality</dt><dd class="mono">{{ (registeredStudent.embedding_quality_score * 100).toFixed(1) }}%</dd></template>
+            <template v-else><dt>New embedding check</dt><dd class="mono">{{ registeredStudent.similarity_check != null ? `${(registeredStudent.similarity_check * 100).toFixed(1)}%` : '—' }}</dd></template>
           </dl>
-          <button class="btn ghost full" @click="resetForm">Register another student</button>
+          <button class="btn ghost full" @click="resetForm">{{ isUpdate ? 'Back to student management' : 'Register another student' }}</button>
         </div>
       </div>
     </div>

@@ -7,7 +7,7 @@ and lets the embedding index scale/be swapped independently.
 import os
 import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy import select, update
+from sqlalchemy import select, update, text
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
@@ -28,6 +28,12 @@ async def init_db() -> dict[str, str]:
     from app.models_db import Student
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Lightweight compatibility migration for deployments created before
+        # face updates had an explicit timestamp.
+        columns = (await conn.execute(text("PRAGMA table_info(students)"))).all()
+        if "updated_at" not in {row[1] for row in columns}:
+            await conn.execute(text("ALTER TABLE students ADD COLUMN updated_at DATETIME"))
+            await conn.execute(text("UPDATE students SET updated_at = created_at WHERE updated_at IS NULL"))
     # `create_all` does not migrate existing rows. Safely replace legacy UUID
     # primary keys with their already-unique roll numbers during startup.
     async with AsyncSessionLocal() as session:

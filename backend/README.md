@@ -144,12 +144,16 @@ Storage and recognition security are configuration-only settings:
 IMAGE_STORAGE_MODE=both
 # 0.0-1.0; authentication stops before liveness/vector search below this value
 FACE_VISIBILITY_THRESHOLD=0.80
-# The visibility score combines eye/nose/mouth evidence at the five SCRFD
-# landmarks with frame integrity. Authentication stops when the score is below
-# FACE_VISIBILITY_THRESHOLD. The component scores are emitted in application
-# logs as `face_visibility_assessed` for camera-specific calibration.
+# The visibility score is the weighted eye/nose/mouth evidence at the five
+# SCRFD landmarks plus frame integrity. SCRFD does not provide per-landmark
+# visibility confidence, so the estimator checks local contrast/detail around
+# each landmark instead of treating a dark occluder as a visible feature.
+# Authentication stops when the score is below FACE_VISIBILITY_THRESHOLD. The
+# component scores are emitted in `face_visibility_assessed` logs for
+# camera-specific calibration.
 FACE_VISIBILITY_FRAME_MARGIN_RATIO=0.025
 FACE_VISIBILITY_MIN_LANDMARK_SPREAD_RATIO=0.18
+# Legacy variable names; values are normalized local-evidence floors.
 FACE_VISIBILITY_EYE_DARK_PIXEL_RATIO=0.30
 FACE_VISIBILITY_NOSE_DARK_PIXEL_RATIO=0.20
 FACE_VISIBILITY_MOUTH_DARK_PIXEL_RATIO=0.40
@@ -181,6 +185,22 @@ Check it's alive:
 ```bash
 curl http://localhost:8000/health
 ```
+
+### 3.8 Model performance telemetry
+
+`GET /api/v1/monitoring/stats` and the **Manage** dashboard show each model's
+name, stage, rolling inference call count, average, P50/P95/P99, minimum and
+maximum latency, device, and load-time VRAM change. Latency is collected per
+model call with a monotonic timer; CUDA is synchronized around the measurement
+when the CUDA runtime is available. Structured logs emit `model_loaded` and
+one `model_inference_performance` event per measured model invocation.
+
+The SCRFD and ArcFace rows share one InsightFace pack. Its load-memory delta
+is therefore reported once as `SCRFD + ArcFace (InsightFace pack)` rather than
+being incorrectly attributed to both models. Load deltas are an operational
+resource indicator, not an exact per-model memory allocation: CUDA and model
+runtimes share allocations inside one process. FAISS search and end-to-end
+authentication timing are displayed separately from model inference timing.
 
 ### 3.7 Optional model benchmark backends
 

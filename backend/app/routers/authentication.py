@@ -60,8 +60,14 @@ async def authenticate(
             pipeline.process_for_authentication, image_bgr
         )
     except NoFaceDetectedError as exc:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        write_auth_audit(authenticated=False, student_id=None, reason="no_face_detected", similarity_score=None, liveness_score=None, timings={}, total_ms=elapsed_ms)
+        logger.info("recognition_result", extra={"event": "recognition_result", "authenticated": False, "reason": "no_face_detected", "latency_ms": round(elapsed_ms, 2)})
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except MultipleFacesDetectedError as exc:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        write_auth_audit(authenticated=False, student_id=None, reason="multiple_faces_detected", similarity_score=None, liveness_score=None, timings={}, total_ms=elapsed_ms)
+        logger.info("recognition_result", extra={"event": "recognition_result", "authenticated": False, "reason": "multiple_faces_detected", "face_count": exc.count, "latency_ms": round(elapsed_ms, 2)})
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"Only one face may be processed at a time, found {exc.count}",
@@ -79,6 +85,7 @@ async def authenticate(
             face_visibility_score=exc.score,
             latency_ms=round(elapsed_ms, 2),
             step_latencies_ms=step_timings,
+            reason="face_partially_occluded",
             message="Face is partially occluded. Please show your complete face.",
         )
     except LivenessRejected as exc:
@@ -97,6 +104,7 @@ async def authenticate(
             liveness_score=exc.score,
             latency_ms=round(elapsed_ms, 2),
             step_latencies_ms=step_timings,
+            reason="spoof_detected",
             message="Spoof detected -- liveness check failed",
         )
 
@@ -110,11 +118,11 @@ async def authenticate(
         for student_id, score in vector_store.search(embedding, top_k=3):
             match_scores[student_id] = max(match_scores.get(student_id, -1.0), score)
     matches = sorted(match_scores.items(), key=lambda item: item[1], reverse=True)
-    step_timings["recognition"] = round(step_timings.get("recognition", 0) + (time.perf_counter() - recognition_started) * 1000, 2)
-    # This is deliberately separate from API wall time: it is exactly the
-    # sum of the requested model stages and is the benchmark value shown in
-    # the dashboard.  ``latency_ms`` remains backward-compatible API time.
-    step_timings["total"] = round(sum(step_timings.get(stage, 0) for stage in ("detection", "alignment", "liveness", "recognition")), 2)
+    step_timings["faiss_search"] = round((time.perf_counter() - recognition_started) * 1000, 2)
+    # Keep model inference, vector search, and API wall time distinct.
+    request.app.state.model_manager.metrics.record_pipeline_inference(step_timings)
+    step_timings["total"] = round(sum(step_timings.get(stage, 0) for stage in ("detection", "alignment", "liveness", "recognition", "faiss_search")), 2)
+    request.app.state.metrics["faiss_latencies"].append(step_timings["faiss_search"])
     elapsed_ms = (time.perf_counter() - start) * 1000
 
     if not matches:
@@ -130,6 +138,7 @@ async def authenticate(
             models=models,
             latency_ms=round(elapsed_ms, 2),
             step_latencies_ms=step_timings,
+            reason="no_matching_enrollment",
             message="User Not Recognized",
         )
 
@@ -152,6 +161,7 @@ async def authenticate(
             models=models,
             latency_ms=round(elapsed_ms, 2),
             step_latencies_ms=step_timings,
+            reason="similarity_below_threshold",
             message="User Not Recognized",
         )
 
@@ -177,6 +187,7 @@ async def authenticate(
                 models=models,
                 latency_ms=round(elapsed_ms, 2),
                 step_latencies_ms=step_timings,
+                reason="matched_student_record_missing",
                 message="User Not Recognized",
             )
         name = student.name
@@ -206,5 +217,6 @@ async def authenticate(
         models=models,
         latency_ms=round(elapsed_ms, 2),
         step_latencies_ms=step_timings,
+        reason="authenticated",
         message="Authenticated",
     )

@@ -6,6 +6,7 @@ import { assessFacePosition, authenticateFace, getModelStatus, setActiveModels }
 const cameraRef = ref(null)
 const scanState = ref('no-face') // no-face | misaligned | ready | scanning | success | danger
 const result = ref(null)
+const attemptLog = ref([])
 const errorMessage = ref('')
 const guidance = ref('Waiting for a face…')
 const modelStatus = ref({ active: { detection: 'SCRFD', liveness: 'MiniFASNet', recognition: 'ArcFace' }, available: {} })
@@ -20,6 +21,31 @@ let consecutiveReadyFrames = 0
 let isActive = true
 const POSITION_INTERVAL_MS = 450
 const RESULT_COOLDOWN_MS = 1800
+
+const reasonText = {
+  authenticated: 'Authentication successful',
+  similarity_below_threshold: 'Similarity below threshold',
+  no_matching_enrollment: 'No matching enrolled face',
+  spoof_detected: 'Spoof detected',
+  face_partially_occluded: 'Face partially occluded',
+  matched_student_record_missing: 'Matched student record is unavailable',
+}
+
+function resetAttempt(lines = []) {
+  result.value = null
+  errorMessage.value = ''
+  attemptLog.value = lines
+}
+
+// function buildAttemptLog(res) {
+//   const lines = ['Face detected']
+//   if (res.face_visibility_score != null) lines.push(`Face visibility: ${(res.face_visibility_score * 100).toFixed(0)}%`)
+//   if (res.liveness_score != null) lines.push(res.reason === 'spoof_detected' ? 'Liveness check failed' : 'Liveness check passed')
+//   if (res.similarity_score != null) lines.push(`Similarity: ${(res.similarity_score * 100).toFixed(2)}%`)
+//   lines.push(res.authenticated ? 'Authentication successful' : 'Authentication failed')
+//   if (!res.authenticated && res.reason) lines.push(`Reason: ${reasonText[res.reason] || res.message}`)
+//   return lines
+// }
 
 function schedulePositionCheck(delay = POSITION_INTERVAL_MS) {
   if (!isActive) return
@@ -41,6 +67,7 @@ async function checkPosition() {
     errorMessage.value = ''
     guidance.value = position.message
     if (position.state === 'ready') {
+      // resetAttempt(['Face detected'])
       scanState.value = 'ready'
       consecutiveReadyFrames += 1
       if (consecutiveReadyFrames >= 2) {
@@ -50,6 +77,11 @@ async function checkPosition() {
     } else {
       scanState.value = position.state === 'misaligned' ? 'misaligned' : 'no-face'
       consecutiveReadyFrames = 0
+      if (position.state === 'no_face') {
+        resetAttempt(['No face detected', 'Waiting for user…'])
+      } else {
+        resetAttempt(['Face detected', `Waiting: ${position.message}`])
+      }
     }
   } catch (err) {
     // The next frame can recover from transient networking/server errors.
@@ -66,13 +98,13 @@ async function recognizeCurrentFace() {
   if (recognitionRequestActive || !cameraRef.value) return
   recognitionRequestActive = true
   scanState.value = 'scanning'
-  result.value = null
-  errorMessage.value = ''
+  // resetAttempt(['Face detected', 'Running liveness check…'])
   try {
     const frame = cameraRef.value.captureFrame({ quality: 0.88, cropToView: false, emitFrame: false })
     if (!frame) return
     const res = await authenticateFace({ imageBase64: frame })
     result.value = res
+    // attemptLog.value = buildAttemptLog(res)
     evaluationRows.value = [{
       id: `${Date.now()}-${Math.random()}`, timestamp: new Date().toLocaleTimeString(),
       models: res.models || modelStatus.value.active, visibility: res.face_visibility_score,
@@ -84,6 +116,7 @@ async function recognizeCurrentFace() {
     guidance.value = res.message
   } catch (err) {
     errorMessage.value = err.message || 'Verification request failed.'
+    attemptLog.value = ['Authentication failed', `Reason: ${errorMessage.value}`]
     scanState.value = 'danger'
     guidance.value = 'Unable to verify. Reposition and try again.'
   } finally {
@@ -162,13 +195,16 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="result-col">
-        <div v-if="!result && !errorMessage" class="placeholder" :class="{ scanning: scanState === 'scanning' }">
+        <div v-if="!result && !errorMessage && !attemptLog.length" class="placeholder" :class="{ scanning: scanState === 'scanning' }">
           <p>{{ scanState === 'scanning' ? 'Running liveness and recognition…' : 'Live results will appear here.' }}</p>
         </div>
 
         <div v-else-if="result && result.authenticated" class="result-card success">
           <p class="result-title">Authenticated</p>
           <p class="result-name">{{ result.name }}</p>
+          <ol class="attempt-log" aria-label="Authentication attempt log">
+            <li v-for="line in attemptLog" :key="line">{{ line }}</li>
+          </ol>
           <dl class="metric-grid">
             <dt>Face Visibility</dt>
             <dd class="mono">{{ percent(result.face_visibility_score, 0) }}</dd>
@@ -190,7 +226,10 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else-if="result && !result.authenticated" class="result-card danger">
-          <p class="result-title">{{ result.message || 'Not recognized' }}</p>
+          <p class="result-title">Authentication failed</p>
+          <ol class="attempt-log" aria-label="Authentication attempt log">
+            <li v-for="line in attemptLog" :key="line">{{ line }}</li>
+          </ol>
           <dl class="metric-grid" v-if="result.similarity_score != null || result.liveness_score != null || result.face_visibility_score != null">
             <template v-if="result.face_visibility_score != null">
               <dt>Face visibility</dt>
@@ -220,6 +259,16 @@ onBeforeUnmount(() => {
         <div v-if="errorMessage" class="result-card danger">
           <p class="result-title">Request failed</p>
           <p class="result-detail">{{ errorMessage }}</p>
+          <ol class="attempt-log" aria-label="Authentication attempt log">
+            <li v-for="line in attemptLog" :key="line">{{ line }}</li>
+          </ol>
+        </div>
+
+        <div v-else-if="!result && attemptLog.length" class="result-card status">
+          <p class="result-title">Awaiting authentication</p>
+          <ol class="attempt-log" aria-label="Current camera state">
+            <li v-for="line in attemptLog" :key="line">{{ line }}</li>
+          </ol>
         </div>
       </div>
     </div>
@@ -372,6 +421,10 @@ th { position: sticky; top: 0; background: var(--panel-raised); color: var(--tex
   background: rgba(240, 97, 107, 0.06);
 }
 
+.result-card.status {
+  background: rgba(69, 214, 196, 0.04);
+}
+
 .result-title {
   font-family: var(--font-display);
   font-weight: 600;
@@ -397,6 +450,17 @@ th { position: sticky; top: 0; background: var(--panel-raised); color: var(--tex
   color: var(--text-muted);
   font-size: 0.85rem;
   margin: 0;
+}
+
+.attempt-log {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 10px 0 0 20px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--text-muted);
+  font-size: 0.84rem;
 }
 
 .metric-grid {

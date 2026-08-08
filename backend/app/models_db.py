@@ -21,3 +21,4 @@ class Student(Base):
     role: Mapped[str] = mapped_column(String(32), default="student")
     embedding_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

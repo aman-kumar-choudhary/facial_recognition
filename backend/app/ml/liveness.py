@@ -137,6 +137,18 @@ class LivenessDetector:
     def model_count(self) -> int:
         return len(self._models)
 
+    def telemetry_info(self) -> dict[str, object]:
+        """Facts exposed by the loaded ONNX liveness session(s)."""
+        inputs = sorted({f"{model.input_width}×{model.input_height}" for model in self._models})
+        classes = sorted({model.class_count for model in self._models})
+        return {
+            "model_type": self._model_label,
+            "purpose": "Passive liveness / anti-spoofing",
+            "framework": "ONNX Runtime",
+            "input_dimensions": ", ".join(inputs),
+            "output_dimensions": f"{classes[0]} classes" if len(classes) == 1 else ", ".join(f"{count} classes" for count in classes),
+        }
+
     def predict(self, image_bgr: np.ndarray, bbox_xyxy: Sequence[float]) -> tuple[bool, float]:
         """Return whether a detector face is live and its fused live score."""
         logits = [self._predict_model(model, image_bgr, bbox_xyxy) for model in self._models]
